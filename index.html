@@ -190,6 +190,19 @@
     font-family: "Cormorant Garamond", Georgia, serif; font-style: italic; font-weight: 600; font-size: 1.3rem;
     padding: .7rem 1.4rem; border-radius: 999px; box-shadow: 0 10px 30px rgba(180,80,110,.2);
     animation: surgir 2.6s ease forwards; white-space: nowrap; }
+  /* ---------- Avisos no celular: faixa de estado e confirmação de envio ---------- */
+  .faixa-alertas { display: flex; align-items: center; gap: .7rem; margin: .2rem 0 .9rem; padding: .75rem .9rem;
+    background: #FFF6E8; border: 1px solid #F0D3A1; border-radius: 1rem; font-size: .86rem; line-height: 1.35; color: var(--ink); }
+  .faixa-alertas.bloq { background: #FDECEF; border-color: #EDB7C4; }
+  .faixa-alertas p { margin: 0; flex: 1; min-width: 0; }
+  .faixa-alertas .btn { flex: none; white-space: nowrap; }
+  .aviso-envio { position: fixed; left: 50%; top: calc(.8rem + env(safe-area-inset-top, 0px)); z-index: 65; transform: translateX(-50%);
+    width: max-content; max-width: min(92vw, 26rem); background: #fff; color: var(--rosa-forte); border: 1px solid var(--line);
+    border-radius: 1rem; padding: .6rem 1rem; font-size: .86rem; font-weight: 700; line-height: 1.35; text-align: center;
+    box-shadow: 0 10px 30px rgba(180,80,110,.18); animation: envioEntra .3s ease both; }
+  .aviso-envio.erro { color: #8A3A12; background: #FFF6E8; border-color: #F0D3A1; }
+  @keyframes envioEntra { from { opacity: 0; transform: translate(-50%, -8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+  @media (prefers-reduced-motion: reduce) { .aviso-envio { animation: none; } }
   @keyframes surgir { 0% { opacity: 0; transform: translate(-50%, 12px); } 12%, 82% { opacity: 1; transform: translate(-50%, 0); }
     100% { opacity: 0; transform: translate(-50%, 6px); } }
 
@@ -866,6 +879,11 @@
         <span id="quem"></span>
         <button class="btn btn-leve" id="sair" type="button">Trocar de pessoa</button>
         <button class="btn btn-leve" id="demoRecomecar" type="button">Recomeçar</button>
+      </div>
+      <!-- aparece só quando este celular não está recebendo avisos -->
+      <div class="faixa-alertas" id="faixaAlertas" role="status" hidden>
+        <p id="faixaAlertasTxt"></p>
+        <button class="btn btn-principal btn-pequeno" id="faixaAlertasBtn" type="button">Ativar avisos</button>
       </div>
       <div class="inicio-slides" id="inicioSlides">
       <section class="inicio-slide">
@@ -1759,8 +1777,8 @@ const backend = {
   // guarda a inscrição deste celular para receber alertas
   inscrever: async () => {},
   // pede para a função da Vercel mandar o alerta (com o login de quem está usando)
-  // na demonstração não manda alerta para ninguém
-  avisar: async () => ({})
+  // na demonstração não manda alerta de verdade: simula que o outro celular recebeu
+  avisar: async () => ({ enviados: 1, celulares: 1 })
 };
 /*BACKEND_END*/
 
@@ -3416,12 +3434,33 @@ const chaveBytes = b64 => { const p = "=".repeat((4 - b64.length % 4) % 4); cons
 const idCelular = endpoint => { let h = 5381; for (let i = 0; i < endpoint.length; i++) h = ((h << 5) + h + endpoint.charCodeAt(i)) >>> 0; return "d" + h.toString(36); };
 function msgAlertas(t, erro) { $("alertasMsg").textContent = t; $("alertasMsg").hidden = !t; $("alertasMsg").classList.toggle("erro-a", !!erro); }
 
+let inscricaoSalva = "";   // evita regravar a mesma inscrição toda vez que o app volta para a tela
 async function guardarInscricao(sub) {
   const j = sub.toJSON();
+  if (j.endpoint === inscricaoSalva) return;
   await backend.inscrever(idCelular(j.endpoint), { uid: usuario.uid, por: primeiroNome(usuario), endpoint: j.endpoint,
     p256dh: j.keys.p256dh, auth: j.keys.auth, ms: Date.now() });
+  inscricaoSalva = j.endpoint;
 }
-// mostra o botão certo conforme o estado deste celular
+// nome de quem recebe os avisos deste celular (o outro)
+const nomeOutro = () => souEla() ? "Lucas" : "Ana";
+// faixa no topo do Início: só aparece quando este celular NÃO está recebendo avisos
+function faixaAlertas(estado) {
+  const f = $("faixaAlertas"), b = $("faixaAlertasBtn");
+  f.hidden = !estado;
+  if (!estado) return;
+  f.classList.toggle("bloq", estado === "bloqueado");
+  b.hidden = estado !== "desligado";
+  $("faixaAlertasTxt").textContent = {
+    desligado: `🔔 Os avisos estão desligados neste celular. Sem eles você não fica sabendo quando ${nomeOutro()} marcar algo.`,
+    bloqueado: `🔕 As notificações deste app estão bloqueadas no celular. Para receber os avisos: Configurações do celular › Apps › Nós dois (ou Chrome) › Notificações › Permitir. Depois abra o app de novo.`,
+    naoSuporta: "🔕 Este navegador não recebe avisos. Abra pelo app instalado (no Android, pelo Chrome; no iPhone, adicionado à Tela de Início).",
+    erro: "⚠️ Não foi possível conferir os avisos deste celular. Feche e abra o app de novo."
+  }[estado];
+}
+$("faixaAlertasBtn").addEventListener("click", () => $("ativarAlertas").click());
+
+// confere o estado deste celular toda vez que o app abre ou volta para a tela, e conserta sozinho o que der
 async function verificarAlertas() {
   if (!usuario) return;
   $("alertasBox").hidden = false;
@@ -3431,16 +3470,30 @@ async function verificarAlertas() {
   }
   if (Notification.permission === "denied") {
     $("ativarAlertas").hidden = true; $("alertasOk").hidden = true;
+    faixaAlertas("bloqueado");
     return msgAlertas("Os alertas estão bloqueados para este app. Libere as notificações nas configurações do Chrome (ou do app instalado) e abra o app de novo.", true);
   }
   try {
     const reg = await navigator.serviceWorker.ready;
-    const sub = await reg.pushManager.getSubscription();
+    let sub = await reg.pushManager.getSubscription();
+    // a permissão continua dada, mas a inscrição sumiu (o navegador renovou ou descartou): refaz sozinho, sem perguntar nada
+    if (Notification.permission === "granted" && !sub)
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: chaveBytes(VAPID_PUBLICA) });
     const ativo = Notification.permission === "granted" && !!sub;
     $("ativarAlertas").hidden = ativo; $("alertasOk").hidden = !ativo;
     if (ativo) await guardarInscricao(sub);   // mantém a inscrição deste celular sempre atualizada
-  } catch (e) { msgAlertas("Não foi possível verificar os alertas: " + (e.code || e.message), true); }
+    faixaAlertas(ativo ? "" : "desligado");
+  } catch (e) {
+    msgAlertas("Não foi possível verificar os alertas: " + (e.code || e.message), true);
+    faixaAlertas("erro");
+  }
 }
+// confere de novo quando o app volta para a tela (ficou aberto em segundo plano)
+document.addEventListener("visibilitychange", () => { if (!document.hidden && usuario) verificarAlertas(); });
+// o service worker avisa quando o navegador trocou a inscrição: grava a nova na hora
+if ("serviceWorker" in navigator) navigator.serviceWorker.addEventListener("message", e => {
+  if (e.data && e.data.tipo === "inscricao-mudou" && usuario) { inscricaoSalva = ""; verificarAlertas(); }
+});
 $("ativarAlertas").addEventListener("click", async () => {
   msgAlertas("");
   $("ativarAlertas").disabled = true;
@@ -3467,15 +3520,26 @@ $("testarAlerta").addEventListener("click", async () => {
   finally { $("testarAlerta").disabled = false; }
 });
 
-// avisa o outro. Nunca atrapalha o uso do app: se falhar, mostra um aviso discreto uma vez só.
-let avisoFalhou = false;
+// recado no topo da tela de quem marcou: confirma que o outro foi avisado, ou diz por que não foi
+function avisoEnvio(texto, erro) {
+  document.querySelectorAll(".aviso-envio").forEach(x => x.remove());
+  const c = document.createElement("div");
+  c.className = "aviso-envio" + (erro ? " erro" : "");
+  c.setAttribute("role", erro ? "alert" : "status");
+  c.textContent = texto;
+  document.body.appendChild(c);
+  setTimeout(() => c.remove(), erro ? 7000 : 2600);
+}
+// avisa o outro. Nunca atrapalha o uso do app, mas nunca falha em silêncio: o servidor responde
+// quantos celulares do outro estão inscritos ("celulares") e quantos aceitaram o aviso ("enviados").
 function avisar(titulo, texto, url, tag) {
   if (!usuario) return;
-  backend.avisar({ titulo, texto, url: url || "/", tag }).catch(e => {
-    if (avisoFalhou) return;
-    avisoFalhou = true;
-    msgAlertas("O alerta para o outro celular não foi enviado: " + e.message, true);
-  });
+  const outro = nomeOutro();
+  backend.avisar({ titulo, texto, url: url || "/", tag }).then(r => {
+    if (r && r.enviados > 0) avisoEnvio(`💌 ${outro} foi ${outro === "Lucas" ? "avisado" : "avisada"}`);
+    else if (r && !r.celulares) avisoEnvio(`⚠️ ${outro} está com os avisos desligados no celular. Peça para abrir o app e tocar em "Ativar avisos".`, true);
+    else avisoEnvio(`⚠️ O aviso não chegou ao celular ${outro === "Lucas" ? "do" : "da"} ${outro}. Peça para abrir o app: os avisos voltam a ser conferidos ao abrir.`, true);
+  }).catch(e => avisoEnvio(`⚠️ O aviso para ${outro} não foi enviado (${e.message}). Confira a internet e tente de novo.`, true));
 }
 const nomeEu = () => primeiroNome(usuario);
 function avisarMarcacao(id, r, dia) {
